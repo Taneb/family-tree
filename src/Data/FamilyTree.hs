@@ -2,6 +2,8 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# OPTIONS_GHC -Wall #-}
 {-|
 Maintainer  :  nvd124@gmail.com
 Stability   :  unstable
@@ -66,7 +68,11 @@ module Data.FamilyTree
  -- ** Destruction
  deletePerson,
  deleteFamily,
- deleteEvent
+ deleteEvent,
+ -- * Utility functions
+ partialDateFromYear,
+ partialDateFromMonth,
+ partialDateFromDay
 ) where
 
 import Control.Applicative
@@ -92,8 +98,8 @@ import qualified Numeric.Interval as I
 -- $ids
 -- The various ID types represent an identifier for a person, family, or event. 
 -- While the constructors are exported, it is probably better to use the
--- various 'Traversal's for manipulation, as they echo the changes around the tree
--- automatically.
+-- various 'Traversal's for manipulation, as they echo the changes around the
+-- tree automatically.
 newtype PersonID = PersonID {getPersonID :: Int} deriving (Eq, Ord, Show, Read)
 
 instance Wrapped Int Int PersonID PersonID where
@@ -115,14 +121,26 @@ data Location = Coord Double Double | PlaceName Text deriving (Eq, Show)
 -- | The Relationship type. Marriage is the default for similarity to GEDCOM.
 data Relationship = Marriage | Other Text deriving (Eq, Show)
 
+type PartialDate = Interval Day
+
+partialDateFromYear :: Integer -> PartialDate
+partialDateFromYear n = I.I (fromGregorian n 1 1) (fromGregorian n 12 31)
+
+partialDateFromMonth :: Integer -> Int -> PartialDate
+partialDateFromMonth y m = I.I (fromGregorian y m 1) . 
+    fromGregorian y m $ gregorianMonthLength y m
+
+partialDateFromDay :: Integer -> Int -> Int -> PartialDate
+partialDateFromDay y m d = I.singleton $ fromGregorian y m d
+
 -- | The basic type for a person. 'Nothing' meaning unknown (or otherwise 
 -- non-existent, for intance a death date for someone still alive) is a
 -- convention used throughout this library.
 data Person = Person
   {_name :: Maybe Text
-  ,_birthdate :: Maybe (Interval Day)
+  ,_birthdate :: Maybe PartialDate
   ,_birthplace :: Maybe Location
-  ,_deathdate :: Maybe (Interval Day)
+  ,_deathdate :: Maybe PartialDate
   ,_deathplace :: Maybe Location
   ,_attributes :: HashMap Text Text
   ,_attendedEvents :: IntSet
@@ -136,8 +154,8 @@ data Family = Family
   {_head1 :: Maybe PersonID
   ,_head2 :: Maybe PersonID
   ,_relationship :: Maybe Relationship
-  ,_relationFrom :: Maybe (Interval Day)
-  ,_relationTo :: Maybe (Interval Day)
+  ,_relationFrom :: Maybe PartialDate
+  ,_relationTo :: Maybe PartialDate
   ,_children :: IntSet
   } deriving (Eq, Show)
   
@@ -154,7 +172,7 @@ makeLenses ''Family
 -- @
 data Event = Event 
   {_eventInfo :: Text
-  ,_eventDate :: Maybe (Interval Day)
+  ,_eventDate :: Maybe PartialDate
   ,_eventAttendees :: IntSet
   } deriving (Eq, Show)
 
@@ -271,9 +289,11 @@ instance Binary Person where
     e <- get
     return Person
       {_name = fmap decodeUtf8 n
-      ,_birthdate = I.I <$> fmap ModifiedJulianDay bdi <*> fmap ModifiedJulianDay bds
+      ,_birthdate = I.I <$> fmap ModifiedJulianDay bdi <*>
+        fmap ModifiedJulianDay bds
       ,_birthplace = bp
-      ,_deathdate = I.I <$> fmap ModifiedJulianDay ddi <*> fmap ModifiedJulianDay dds
+      ,_deathdate = I.I <$> fmap ModifiedJulianDay ddi <*>
+        fmap ModifiedJulianDay dds
       ,_deathplace = dp
       ,_attributes = HM.fromList $ map (both %~ decodeUtf8) a
       ,_attendedEvents = e
@@ -348,11 +368,18 @@ traversePerson :: PersonID -> SimpleIndexedTraversal PersonID FamilyTree Person
 traversePerson (PersonID n) = indexed $
   \f familyTree -> case familyTree ^. people . at n of
     Nothing -> pure familyTree
-    Just oldPerson -> let newPerson_ = f (PersonID n) oldPerson -- f Person
-                          newEvents_ = flip (IS.difference `on` _attendedEvents) oldPerson <$> newPerson_ -- f IntSet
-                          oldEvents_ =      (IS.difference `on` _attendedEvents) oldPerson <$> newPerson_ -- f IntSet
-                      in (\newPerson newEvents oldEvents -> IS.foldr (\i -> events . _at i . eventAttendees %~ IS.delete n) (IS.foldr (\i -> events . _at i . eventAttendees %~ IS.insert n) (people . _at n .~ newPerson $ familyTree) newEvents) oldEvents) <$> newPerson_ <*> newEvents_ <*> oldEvents_
-                         
+    Just oldPerson -> 
+      let newPerson_ = f (PersonID n) oldPerson
+          newEvents_ = flip (IS.difference `on` _attendedEvents) oldPerson
+            <$> newPerson_
+          oldEvents_ =      (IS.difference `on` _attendedEvents) oldPerson
+            <$> newPerson_
+      in alterPerson familyTree <$> newPerson_ <*> newEvents_ <*> oldEvents_
+  where
+    alterPerson familyTree newPerson =
+      IS.foldr (\i -> events . _at i . eventAttendees %~ IS.delete n) .
+      IS.foldr (\i -> events . _at i . eventAttendees %~ IS.insert n) (
+      people . _at n .~ newPerson $ familyTree)
 
 -- | Constructs a lens for the manipulation of a family in a family tree, from
 -- that family's ID.
@@ -361,17 +388,29 @@ traverseFamily (FamilyID n) = indexed $
   \f familyTree -> case familyTree ^. families . at n of
     Nothing -> pure familyTree
     Just oldFamily -> let newFamily_ = f (FamilyID n) oldFamily
-                      in (\newFamily -> families . _at n .~ newFamily $ familyTree) <$> newFamily_
+                      in alterFamily familyTree <$> newFamily_
+  where
+    alterFamily familyTree newFamily =
+      familyTree & families . _at n .~ newFamily
+
 -- | Constructs a 'Traversal' for the manipulation of an event in a family tree, from
 -- that event's ID.      
 traverseEvent :: EventID -> SimpleIndexedTraversal EventID FamilyTree Event
 traverseEvent (EventID n) = indexed $
   \f familyTree -> case familyTree ^. events . at n of
     Nothing -> pure familyTree
-    Just oldEvent -> let newEvent_ = f (EventID n) oldEvent
-                         oldEventPeople_ =      (IS.difference `on` _eventAttendees) oldEvent <$> newEvent_
-                         newEventPeople_ = flip (IS.difference `on` _eventAttendees) oldEvent <$> newEvent_
-                     in (\newEvent oldEventPeople newEventPeople -> IS.foldr (\i -> people . _at i . attendedEvents %~ IS.delete n) (IS.foldr (\i -> people . _at i . attendedEvents %~ IS.insert n) (events . _at n .~ newEvent $ familyTree) newEventPeople) oldEventPeople) <$> newEvent_ <*> oldEventPeople_ <*> newEventPeople_
+    Just oldEvent ->
+      let newEvent_  = f (EventID n) oldEvent
+          oldPeople_ =      (IS.difference `on` _eventAttendees) oldEvent
+            <$> newEvent_
+          newPeople_ = flip (IS.difference `on` _eventAttendees) oldEvent
+             <$> newEvent_
+      in alterEvent familyTree <$> newEvent_ <*> newPeople_ <*> oldPeople_
+  where
+    alterEvent familyTree newEvent =
+      IS.foldr (\i -> people . _at i . attendedEvents %~ IS.delete n) .
+      IS.foldr (\i -> people . _at i . attendedEvents %~ IS.insert n) (
+      events . _at n .~ newEvent $ familyTree)
 
 -- | Adds a person with minimal information, returning the updated family tree
 -- and the ID of the new person.  
@@ -440,11 +479,4 @@ newTree n = FamilyTree
   ,_events = IM.empty
   }
 
-yearToInterval :: Integer -> Interval Day
-yearToInterval n = I.I (fromGregorian n 1 1) (fromGregorian n 12 31)
 
-yearMonthToInterval :: Integer -> Int -> Interval Day
-yearMonthToInterval y m = I.I (fromGregorian y m 1) (fromGregorian y m (gregorianMonthLength y m))
-
-yearMonthDayToInterval :: Integer -> Int -> Int -> Interval Day
-yearMonthDayToInterval y m d = I.singleton $ fromGregorian y m d
