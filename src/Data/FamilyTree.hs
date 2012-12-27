@@ -11,7 +11,7 @@ Portability :  portable
 This module is for Family Trees.
 
 It uses lenses for the manipulation of people. For the usage of lenses, see
-"Data.Lens.Lazy"
+"Control.Lens"
 
 It is reccomended to use "Data.Binary" to do saving and loading.
 
@@ -52,6 +52,7 @@ module Data.FamilyTree
  FamilyID(..),
  EventID(..),
  -- ** Other types
+ PartialDate,
  Location(..),
  Relationship(..),
  -- * Functions
@@ -74,22 +75,23 @@ module Data.FamilyTree
  partialDateFromDay
 ) where
 
-import Control.Applicative
+import Control.Applicative (Applicative(..), (<$>), Alternative(..))
 import Control.Lens hiding (children)
-import Data.Binary
-import Data.Function
+
+import Data.Binary (Word8, Binary(..), getWord8)
+import Data.Function (on)
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
-import Data.Maybe
-import Data.Monoid
+import Data.Maybe (listToMaybe)
+import Data.Monoid (Monoid(..), First(..))
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IM
 import Data.IntSet (IntSet)
 import qualified Data.IntSet as IS
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Text.Encoding
-import Data.Time
+import Data.Text.Encoding (encodeUtf8, decodeUtf8)
+import Data.Time (Day(..), fromGregorian, gregorianMonthLength)
 
 import Numeric.Interval (Interval)
 import qualified Numeric.Interval as I

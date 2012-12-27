@@ -10,13 +10,18 @@ name:                family-tree
 -- PVP summary:      +-+------- breaking API changes
 --                   | | +----- non-breaking API additions
 --                   | | | +--- code changes with no API change
-version:             0.3.0.0
+version:             0.3.0.2
+
+package-url:         https://github.com/Taneb/family-tree
 
 -- A short (one-line) description of the package.
 synopsis:            A family tree library for the Haskell programming language.
 
 -- A longer description of the package.
--- description:         
+description:         A family tree library for the Haskell programming language.
+                     
+                     Uses "Control.Lens" for modification and "Data.Binary" for
+                     serialization.
 
 -- URL for the project homepage or repository.
 homepage:            https://github.com/Taneb/family-tree
@@ -37,7 +42,7 @@ maintainer:          nvd1234@gmail.com
 -- A copyright notice.
 -- copyright:           
 
-category:            Data
+category:            Data, Genealogy
 
 build-type:          Simple
 
@@ -53,8 +58,18 @@ library
   -- other-modules:       
   
   -- Other library packages from which modules are imported.
-  build-depends:       base ==4.6.*, lens ==3.7.*, binary ==0.5.*, unordered-containers ==0.2.*, containers ==0.5.*, text ==0.11.*, time ==1.4.*, intervals ==0.2.*
+  build-depends:       base >= 4.3 && < 5,
+                       lens >= 3.7 && < 3.9,
+                       binary < 0.7,
+                       unordered-containers ==0.2.*,
+                       containers >=0.4.2 && < 0.6,
+                       text ==0.11.*,
+                       time < 1.5,
+                       intervals < 0.3
   
   -- Directories containing source files.
   hs-source-dirs:      src
-  
+
+source-repository head
+  type: git
+  location: git://github.com/Taneb/family-tree.git
