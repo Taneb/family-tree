@@ -1,4 +1,8 @@
-{- |
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE Rank2Types #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-|
 Maintainer  :  nvd124@gmail.com
 Stability   :  unstable
 Portability :  portable
@@ -17,9 +21,30 @@ module Data.FamilyTree
  -- * Types
  -- ** Main types
  Person(..),
+ name,
+ attributes,
+ birthdate,
+ birthplace,
+ deathdate,
+ deathplace,
+ attendedEvents,
  Family(..),
+ head1,
+ head2,
+ children,
+ relationFrom,
+ relationTo,
+ relationship,
  Event(..),
+ eventInfo,
+ eventDate,
+ eventAttendees,
+ 
  FamilyTree(..),
+ treeName,
+ people,
+ families,
+ events,
  -- ** ID types
  -- $ids
  PersonID(..),
@@ -35,72 +60,54 @@ module Data.FamilyTree
  addFamily,
  addEvent,
  -- ** Manipulation
- personLens,
- familyLens,
- eventLens,
+ traversePerson,
+ traverseFamily,
+ traverseEvent,
  -- ** Destruction
  deletePerson,
  deleteFamily,
  deleteEvent
 ) where
 
-import Control.Applicative ((<$>))
-import Control.Arrow ((***))
-import Control.Monad (join)
-
-import Data.Binary (Binary, get, put, Word8, getWord8)
-import Data.Function (on)
+import Control.Applicative
+import Control.Lens hiding (children)
+import Data.Binary
+import Data.Function
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
-import Data.Lens.Common (Lens, lens)
-import Data.Maybe (listToMaybe)
+import Data.Maybe
+import Data.Monoid
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as IM
 import Data.IntSet (IntSet)
 import qualified Data.IntSet as IS
 import Data.Text (Text)
 import qualified Data.Text as T
-import Data.Text.Encoding (encodeUtf8, decodeUtf8)
-import Data.Time (Day(..))
+import Data.Text.Encoding
+import Data.Time
 
--- | The basic type for a person. 'Nothing' meaning unknown (or otherwise 
--- non-existent, for intance a death date for someone still alive) is a
--- convention used throughout this library.
-data Person = Person
-  {name :: Maybe Text
-  ,birthdate :: Maybe Day
-  ,birthplace :: Maybe Location
-  ,deathdate :: Maybe Day
-  ,deathplace :: Maybe Location
-  ,attributes :: HashMap Text Text
-  ,attendedEvents :: IntSet
-  } deriving (Eq, Show)
+import Numeric.Interval (Interval)
+import qualified Numeric.Interval as I
 
--- | The basic type for a family. Which person is head1 and which is head2 is
--- arbitrary, but try to use a consistent rule
-data Family = Family
-  {head1 :: Maybe Int
-  ,head2 :: Maybe Int
-  ,relationship :: Maybe Relationship
-  ,relationFrom :: Maybe Day
-  ,relationTo :: Maybe Day
-  ,children :: IntSet
-  } deriving (Eq, Show)
-  
--- | The basic type for an event. For example:
---
--- @
---   Event {
---     eventInfo = \"Battle of Agincourt\"
---     eventDate = fromGregorianValid 1415 10 25
---     eventAttendees = IM.empty
---         }
--- @
-data Event = Event 
-  {eventInfo :: Text
-  ,eventDate :: Maybe Day
-  ,eventAttendees :: IntSet
-  } deriving (Eq, Show)
+-- $ids
+-- The various ID types represent an identifier for a person, family, or event. 
+-- While the constructors are exported, it is probably better to use the
+-- various 'Traversal's for manipulation, as they echo the changes around the tree
+-- automatically.
+newtype PersonID = PersonID {getPersonID :: Int} deriving (Eq, Ord, Show, Read)
+
+instance Wrapped Int Int PersonID PersonID where
+  wrapped = iso PersonID getPersonID
+
+newtype FamilyID = FamilyID {getFamilyID :: Int} deriving (Eq, Ord, Show, Read)
+
+instance Wrapped Int Int FamilyID FamilyID where
+  wrapped = iso FamilyID getFamilyID
+
+newtype EventID = EventID {getEventID :: Int} deriving (Eq, Ord, Show, Read)
+
+instance Wrapped Int Int EventID EventID where
+  wrapped = iso EventID getEventID
 
 -- | The Location type. Either a coordinate or a placename.  
 data Location = Coord Double Double | PlaceName Text deriving (Eq, Show)
@@ -108,14 +115,111 @@ data Location = Coord Double Double | PlaceName Text deriving (Eq, Show)
 -- | The Relationship type. Marriage is the default for similarity to GEDCOM.
 data Relationship = Marriage | Other Text deriving (Eq, Show)
 
--- | The core structure of a family tree.
-data FamilyTree = FamilyTree
-  {treeName :: Text
-  ,people :: IntMap Person
-  ,families :: IntMap Family
-  ,events :: IntMap Event
+-- | The basic type for a person. 'Nothing' meaning unknown (or otherwise 
+-- non-existent, for intance a death date for someone still alive) is a
+-- convention used throughout this library.
+data Person = Person
+  {_name :: Maybe Text
+  ,_birthdate :: Maybe (Interval Day)
+  ,_birthplace :: Maybe Location
+  ,_deathdate :: Maybe (Interval Day)
+  ,_deathplace :: Maybe Location
+  ,_attributes :: HashMap Text Text
+  ,_attendedEvents :: IntSet
+  } deriving (Eq, Show)
+             
+makeLenses ''Person
+
+-- | The basic type for a family. Which person is head1 and which is head2 is
+-- arbitrary, but try to use a consistent rule
+data Family = Family
+  {_head1 :: Maybe PersonID
+  ,_head2 :: Maybe PersonID
+  ,_relationship :: Maybe Relationship
+  ,_relationFrom :: Maybe (Interval Day)
+  ,_relationTo :: Maybe (Interval Day)
+  ,_children :: IntSet
   } deriving (Eq, Show)
   
+makeLenses ''Family
+
+-- | The basic type for an event. For example:
+--
+-- @
+--   Event {
+--     _eventInfo = \"Battle of Agincourt\"
+--     _eventDate = fromGregorianValid 1415 10 25
+--     _eventAttendees = IM.empty
+--         }
+-- @
+data Event = Event 
+  {_eventInfo :: Text
+  ,_eventDate :: Maybe (Interval Day)
+  ,_eventAttendees :: IntSet
+  } deriving (Eq, Show)
+
+makeLenses ''Event
+
+-- | The core structure of a family tree.
+data FamilyTree = FamilyTree
+  {_treeName :: Text
+  ,_people :: IntMap Person
+  ,_families :: IntMap Family
+  ,_events :: IntMap Event
+  } deriving (Eq, Show)
+  
+makeLenses ''FamilyTree
+
+instance Monoid Person where
+  mempty = Person {
+    _name = Nothing,
+    _birthdate = Nothing,
+    _birthplace = Nothing,
+    _deathdate = Nothing,
+    _deathplace = Nothing,
+    _attributes = HM.empty,
+    _attendedEvents = IS.empty
+    }
+  p1 `mappend` p2 = Person {
+    _name = ((<|>) `on` _name) p1 p2,
+    _birthdate = ((<|>) `on` _birthdate) p1 p2,
+    _birthplace = ((<|>) `on` _birthplace) p1 p2,
+    _deathdate = ((<|>) `on` _deathdate) p1 p2,
+    _deathplace = ((<|>) `on` _deathplace) p1 p2,
+    _attributes = (HM.union `on` _attributes) p1 p2,
+    _attendedEvents = (IS.union `on` _attendedEvents) p1 p2
+    }
+
+instance Monoid Family where
+  mempty = Family {
+    _head1 = Nothing,
+    _head2 = Nothing,
+    _relationship = Nothing,
+    _relationFrom = Nothing,
+    _relationTo = Nothing,
+    _children = IS.empty
+    }
+  f1 `mappend` f2 = Family {
+    _head1 = getFirst $ (mappend `on` First . _head1) f1 f2,
+    _head2 = getFirst $ (mappend `on` First . _head2) f1 f2,
+    _relationship = getFirst $ (mappend `on` First . _relationship) f1 f2,
+    _relationFrom = getFirst $ (mappend `on` First . _relationFrom) f1 f2,
+    _relationTo = getFirst $ (mappend `on` First . _relationTo) f1 f2,
+    _children = (IS.union `on` _children) f1 f2
+    }
+
+instance Monoid Event where
+  mempty = Event {
+    _eventInfo = T.empty,
+    _eventDate = Nothing,
+    _eventAttendees = IS.empty
+    }
+  e1 `mappend` e2 = Event {
+    _eventInfo = (T.append `on` _eventInfo) e1 e2,
+    _eventDate = getFirst $ (mappend `on` First . _eventDate) e1 e2,
+    _eventAttendees = (IS.union `on` _eventAttendees) e1 e2
+    }
+
 instance Binary Location where
   put (Coord x y) = do
     put (0 :: Word8)
@@ -146,262 +250,201 @@ instance Binary Relationship where
 
 instance Binary Person where
   put person = do
-    put (encodeUtf8 <$> name person)
-    put (toModifiedJulianDay <$> birthdate person)
-    put (birthplace person)
-    put (toModifiedJulianDay <$> deathdate person)
-    put (deathplace person)
-    put (map (join (***) encodeUtf8) . HM.toList $ attributes person)
-    put (attendedEvents person)
+    put (encodeUtf8 <$> _name person)
+    put (toModifiedJulianDay . I.inf <$> _birthdate person)
+    put (toModifiedJulianDay . I.sup <$> _birthdate person)
+    put (_birthplace person)
+    put (toModifiedJulianDay . I.inf <$> _deathdate person)
+    put (toModifiedJulianDay . I.sup <$> _deathdate person)
+    put (_deathplace person)
+    put (map (both %~ encodeUtf8) . HM.toList $ _attributes person)
+    put (_attendedEvents person)
   get = do
     n <- get
-    bd <- get
+    bdi <- get
+    bds <- get
     bp <- get
-    dd <- get
+    ddi <- get
+    dds <- get
     dp <- get
     a <- get
     e <- get
     return Person
-      {name = fmap decodeUtf8 n
-      ,birthdate = fmap ModifiedJulianDay bd
-      ,birthplace = bp
-      ,deathdate = fmap ModifiedJulianDay dd
-      ,deathplace = dp
-      ,attributes = HM.fromList $ map (join (***) decodeUtf8) a
-      ,attendedEvents = e
+      {_name = fmap decodeUtf8 n
+      ,_birthdate = I.I <$> fmap ModifiedJulianDay bdi <*> fmap ModifiedJulianDay bds
+      ,_birthplace = bp
+      ,_deathdate = I.I <$> fmap ModifiedJulianDay ddi <*> fmap ModifiedJulianDay dds
+      ,_deathplace = dp
+      ,_attributes = HM.fromList $ map (both %~ decodeUtf8) a
+      ,_attendedEvents = e
       }
 
 instance Binary Family where
   put fam = do
-    put $ head1 fam
-    put $ head2 fam
-    put $ relationship fam
-    put $ toModifiedJulianDay <$> relationFrom fam
-    put $ toModifiedJulianDay <$> relationTo fam
-    put $ children fam
+    put $ getPersonID <$> _head1 fam
+    put $ getPersonID <$> _head2 fam
+    put $ _relationship fam
+    put $ toModifiedJulianDay . I.inf <$> _relationFrom fam
+    put $ toModifiedJulianDay . I.sup <$> _relationFrom fam
+    put $ toModifiedJulianDay . I.inf <$> _relationTo fam
+    put $ toModifiedJulianDay . I.sup <$> _relationTo fam
+    put $ _children fam
   get = do
     h1 <- get
     h2 <- get
     r <- get
-    rf <- get
-    rt <- get
+    rfi <- get
+    rfs <- get
+    rti <- get
+    rts <- get
     c <- get
     return Family
-      {head1 = h1
-      ,head2 = h2
-      ,relationship = r
-      ,relationFrom = fmap ModifiedJulianDay rf
-      ,relationTo = fmap ModifiedJulianDay rt
-      ,children = c
+      {_head1 = PersonID <$> h1
+      ,_head2 = PersonID <$> h2
+      ,_relationship = r
+      ,_relationFrom = I.I <$> fmap ModifiedJulianDay rfi <*> fmap ModifiedJulianDay rfs
+      ,_relationTo = I.I <$> fmap ModifiedJulianDay rti <*> fmap ModifiedJulianDay rts
+      ,_children = c
       }
       
 instance Binary Event where
   put evnt = do
-    put . encodeUtf8 $ eventInfo evnt
-    put $ toModifiedJulianDay <$> eventDate evnt
-    put $ eventAttendees evnt
+    put . encodeUtf8 $ _eventInfo evnt
+    put $ toModifiedJulianDay . I.inf <$> _eventDate evnt
+    put $ toModifiedJulianDay . I.sup <$> _eventDate evnt
+    put $ _eventAttendees evnt
   get = do
     n <- get
-    d <- get
+    di <- get
+    ds <- get
     a <- get
     return Event
-      {eventInfo = decodeUtf8 n
-      ,eventDate = fmap ModifiedJulianDay d
-      ,eventAttendees = a
+      {_eventInfo = decodeUtf8 n
+      ,_eventDate = I.I <$> fmap ModifiedJulianDay di <*> fmap ModifiedJulianDay ds
+      ,_eventAttendees = a
       }
 
 instance Binary FamilyTree where
   put tree = do
-    put $ encodeUtf8 $ treeName tree
-    put $ people tree
-    put $ families tree
-    put $ events tree
+    put $ encodeUtf8 $ _treeName tree
+    put $ _people tree
+    put $ _families tree
+    put $ _events tree
   get = do
     n <- get
     p <- get
     f <- get
     e <- get
     return FamilyTree
-      {treeName = decodeUtf8 n
-      ,people = p
-      ,families = f
-      ,events = e
+      {_treeName = decodeUtf8 n
+      ,_people = p
+      ,_families = f
+      ,_events = e
       }
 
--- $ids
--- The various ID types represent an identifier for a person, family, or event. 
--- While the constructors are exported, it is probably better to use the
--- various lenses for manipulation, as they echo the changes around the tree
--- automatically.
-newtype PersonID = PersonID Int
-
-newtype FamilyID = FamilyID Int
-
-newtype EventID = EventID Int
-
--- | Constructs a lens for the manipulation of a person in a family tree, from
--- that person's ID. Using an ID that does not correspond to a person is an
--- error, and it is impossible to create or destroy people using a lens created
--- by this. 
-personLens :: PersonID -> Lens FamilyTree Person
-personLens (PersonID n) = lens ((IM.! n) . people) $
-  \person familyTree ->
-    let oldPerson = people familyTree IM.! n
-        newattended = (IS.difference `on` attendedEvents)
-          person oldPerson
-        oldattended = (IS.difference `on` attendedEvents)
-          oldPerson person 
-    in familyTree
-      {people = IM.insert n person (people familyTree)
-      ,events = IS.foldr (\i -> IM.adjust
-        (\event -> event 
-           {eventAttendees = IS.delete i (eventAttendees event)}) i)
-        (IS.foldr (\i -> IM.adjust
-          (\event -> event 
-             {eventAttendees = IS.insert i (eventAttendees event)}) i)
-          (events familyTree) newattended) oldattended
-      }
+-- | Constructs a 'Traversal' for the manipulation of a person in a family tree, from
+-- that person's ID. 
+traversePerson :: PersonID -> SimpleIndexedTraversal PersonID FamilyTree Person
+traversePerson (PersonID n) = indexed $
+  \f familyTree -> case familyTree ^. people . at n of
+    Nothing -> pure familyTree
+    Just oldPerson -> let newPerson_ = f (PersonID n) oldPerson -- f Person
+                          newEvents_ = flip (IS.difference `on` _attendedEvents) oldPerson <$> newPerson_ -- f IntSet
+                          oldEvents_ =      (IS.difference `on` _attendedEvents) oldPerson <$> newPerson_ -- f IntSet
+                      in (\newPerson newEvents oldEvents -> IS.foldr (\i -> events . _at i . eventAttendees %~ IS.delete n) (IS.foldr (\i -> events . _at i . eventAttendees %~ IS.insert n) (people . _at n .~ newPerson $ familyTree) newEvents) oldEvents) <$> newPerson_ <*> newEvents_ <*> oldEvents_
+                         
 
 -- | Constructs a lens for the manipulation of a family in a family tree, from
--- that family's ID. Using an ID that does not correspond to a family is an
--- error, and it is impossible to create or destroy families using a lens
--- created by this.       
-familyLens :: FamilyID -> Lens FamilyTree Family
-familyLens (FamilyID n) = lens ((IM.! n) . families) $
-  \family' familyTree ->
-    familyTree
-      {families = IM.insert n family' (families familyTree)
-      }
-
--- | Constructs a lens for the manipulation of an event in a family tree, from
--- that event's ID. Using an ID that does not correspond to an event is an
--- error, and it is impossible to create or destroy events using a lens created
--- by this.       
-eventLens :: EventID -> Lens FamilyTree Event
-eventLens (EventID n) = lens ((IM.! n) . events) $
-  \event familyTree ->
-    familyTree
-      {events = IM.insert n event (events familyTree)
-      ,people =
-        let oldEventPeople =
-              eventAttendees (events familyTree IM.! n)
-              IS.\\ eventAttendees event
-            newEventPeople = 
-              eventAttendees event
-              IS.\\ eventAttendees (events familyTree IM.! n)
-        in IS.foldr
-          (IM.adjust (\ person -> person
-             {attendedEvents = IS.insert n (attendedEvents person)}))
-          (IS.foldr
-            (IM.adjust (\person -> person 
-              {attendedEvents = IS.delete n (attendedEvents person)}))
-            (people familyTree)
-            oldEventPeople)
-          newEventPeople
-      }
-      
-blankPerson :: Person
-blankPerson = Person
-  {name = Nothing
-  ,birthdate = Nothing
-  ,birthplace = Nothing
-  ,deathdate = Nothing
-  ,deathplace = Nothing
-  ,attributes = HM.empty
-  ,attendedEvents = IS.empty
-  }
-  
-blankFamily :: Family
-blankFamily = Family
-  {head1 = Nothing
-  ,head2 = Nothing
-  ,relationship = Nothing
-  ,relationFrom = Nothing
-  ,relationTo = Nothing
-  ,children = IS.empty
-  }
-  
-blankEvent :: Event
-blankEvent = Event
-  {eventInfo = T.empty
-  ,eventDate = Nothing
-  ,eventAttendees = IS.empty
-  }
+-- that family's ID.
+traverseFamily :: FamilyID -> SimpleIndexedTraversal FamilyID FamilyTree Family
+traverseFamily (FamilyID n) = indexed $
+  \f familyTree -> case familyTree ^. families . at n of
+    Nothing -> pure familyTree
+    Just oldFamily -> let newFamily_ = f (FamilyID n) oldFamily
+                      in (\newFamily -> families . _at n .~ newFamily $ familyTree) <$> newFamily_
+-- | Constructs a 'Traversal' for the manipulation of an event in a family tree, from
+-- that event's ID.      
+traverseEvent :: EventID -> SimpleIndexedTraversal EventID FamilyTree Event
+traverseEvent (EventID n) = indexed $
+  \f familyTree -> case familyTree ^. events . at n of
+    Nothing -> pure familyTree
+    Just oldEvent -> let newEvent_ = f (EventID n) oldEvent
+                         oldEventPeople_ =      (IS.difference `on` _eventAttendees) oldEvent <$> newEvent_
+                         newEventPeople_ = flip (IS.difference `on` _eventAttendees) oldEvent <$> newEvent_
+                     in (\newEvent oldEventPeople newEventPeople -> IS.foldr (\i -> people . _at i . attendedEvents %~ IS.delete n) (IS.foldr (\i -> people . _at i . attendedEvents %~ IS.insert n) (events . _at n .~ newEvent $ familyTree) newEventPeople) oldEventPeople) <$> newEvent_ <*> oldEventPeople_ <*> newEventPeople_
 
 -- | Adds a person with minimal information, returning the updated family tree
 -- and the ID of the new person.  
-addPerson :: FamilyTree -> (FamilyTree, PersonID)
+addPerson :: FamilyTree -> (PersonID, FamilyTree)
 addPerson familyTree =
   let n = maybe 0 fst $
           listToMaybe $
           dropWhile (uncurry (==)) $
-          zip [1 ..] $ IM.keys $ people familyTree
-  in (familyTree
-       {people = IM.insert n blankPerson $ people familyTree}, PersonID n)
+          zip [1 ..] $ IM.keys $ _people familyTree
+  in (PersonID n, people . at n ?~ mempty $ familyTree)
 
 -- | Adds a family with minimal information, returning the updated family tree
 -- and the ID of the new family.  
-addFamily :: FamilyTree -> (FamilyTree, FamilyID)
+addFamily :: FamilyTree -> (FamilyID, FamilyTree)
 addFamily familyTree =
   let n = maybe 0 fst $
           listToMaybe $
           dropWhile (uncurry (==)) $
-          zip [1 ..] $ IM.keys $ families familyTree
-  in (familyTree 
-       {families = IM.insert n blankFamily $ families familyTree}, FamilyID n)
+          zip [1 ..] $ IM.keys $ _families familyTree
+  in (FamilyID n, families . at n ?~ mempty $ familyTree)
 
 -- | Adds an event with minimal information, returning the updated family tree
 -- and the ID of the new event.
-addEvent :: FamilyTree -> (FamilyTree, EventID)
+addEvent :: FamilyTree -> (EventID, FamilyTree)
 addEvent familyTree =
   let n = maybe 0 fst $
           listToMaybe $
           dropWhile (uncurry (==)) $
-          zip [1 ..] $ IM.keys $ events familyTree
-  in (familyTree {events = IM.insert n blankEvent $ events familyTree}, EventID n)
+          zip [1 ..] $ IM.keys $ _events familyTree
+  in (EventID n, events . at n ?~ mempty $ familyTree)
 
 -- | Deletes a person from the family tree, removing all references to them.  
 deletePerson :: PersonID -> FamilyTree -> FamilyTree
 deletePerson (PersonID n) familyTree =
-  familyTree 
-    {people = IM.delete n $ people familyTree
-    ,families = IM.map
-       (\fam -> fam
-         {head1 = if head1 fam == Just n then Nothing else head1 fam
-         ,head2 = if head2 fam == Just n then Nothing else head2 fam
-         ,children = IS.delete n $ children fam
-         }
-         )
-       (families familyTree)
-    ,events = IM.map
-      (\evnt -> evnt
-        {eventAttendees = IS.delete n $ eventAttendees evnt}
-        )
-      (events familyTree)
-    }
+  familyTree &
+  people . at n .~ Nothing &
+  families %~ IM.map (
+    \fam -> fam &
+            head1 %~ (id & resultAt (Just $ PersonID n) .~ Nothing) &
+            head2 %~ (id & resultAt (Just $ PersonID n) .~ Nothing) &
+            children . contains n .~ False
+            ) &
+  events %~ IM.map (eventAttendees . contains n .~ False)
 
 -- | Deletes a family from the family tree, removing all references to it.    
 deleteFamily :: FamilyID -> FamilyTree -> FamilyTree
-deleteFamily (FamilyID n) familyTree =
-  familyTree
-    {families = IM.delete n $ families familyTree}
+deleteFamily (FamilyID n) = families . at n .~ Nothing
 
 -- | Deletes an event from the family tree, removing all references to it.
 deleteEvent :: EventID -> FamilyTree -> FamilyTree
 deleteEvent (EventID n) familyTree =
-  let relevantPeople = eventAttendees (events familyTree IM.! n)
+  let relevantPeople = _eventAttendees (_events familyTree IM.! n)
   in familyTree
-       {events = IM.delete n $ events familyTree
-       ,people = IS.foldr (IM.adjust
-         (\p -> p {attendedEvents = IS.delete n $ attendedEvents p}))
-         (people familyTree) relevantPeople
+       {_events = IM.delete n $ _events familyTree
+       ,_people = IS.foldr (IM.adjust
+         (\p -> p {_attendedEvents = IS.delete n $ _attendedEvents p}))
+         (_people familyTree) relevantPeople
        }           
 
 -- | Creates a new tree with a given name.       
 newTree :: Text -> FamilyTree
 newTree n = FamilyTree
-  {treeName = n
-  ,people = IM.empty
-  ,families = IM.empty
-  ,events = IM.empty
+  {_treeName = n
+  ,_people = IM.empty
+  ,_families = IM.empty
+  ,_events = IM.empty
   }
+
+yearToInterval :: Integer -> Interval Day
+yearToInterval n = I.I (fromGregorian n 1 1) (fromGregorian n 12 31)
+
+yearMonthToInterval :: Integer -> Int -> Interval Day
+yearMonthToInterval y m = I.I (fromGregorian y m 1) (fromGregorian y m (gregorianMonthLength y m))
+
+yearMonthDayToInterval :: Integer -> Int -> Int -> Interval Day
+yearMonthDayToInterval y m d = I.singleton $ fromGregorian y m d
