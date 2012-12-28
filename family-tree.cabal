@@ -10,7 +10,7 @@ name:                family-tree
 -- PVP summary:      +-+------- breaking API changes
 --                   | | +----- non-breaking API additions
 --                   | | | +--- code changes with no API change
-version:             0.3.0.2
+version:             0.4.0.0
 
 package-url:         https://github.com/Taneb/family-tree
 
@@ -63,6 +63,7 @@ library
                        binary < 0.7,
                        unordered-containers ==0.2.*,
                        containers >=0.4.2 && < 0.6,
+                       tables ==0.1.*,
                        text ==0.11.*,
                        time < 1.5,
                        intervals < 0.3
