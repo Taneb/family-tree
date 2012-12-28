@@ -365,12 +365,12 @@ instance Binary FamilyTree where
 
 -- | Constructs a 'Traversal' for the manipulation of a person in a family tree, from
 -- that person's ID. 
-traversePerson :: PersonID -> SimpleIndexedTraversal PersonID FamilyTree Person
-traversePerson (PersonID n) = indexed $
+traversePerson :: PersonID -> IndexedTraversal' PersonID FamilyTree Person
+traversePerson (PersonID n) = 
   \f familyTree -> case familyTree ^. people . at n of
     Nothing -> pure familyTree
     Just oldPerson -> 
-      let newPerson_ = f (PersonID n) oldPerson
+      let newPerson_ = indexed f (PersonID n) oldPerson
           newEvents_ = flip (IS.difference `on` _attendedEvents) oldPerson
             <$> newPerson_
           oldEvents_ =      (IS.difference `on` _attendedEvents) oldPerson
@@ -378,30 +378,30 @@ traversePerson (PersonID n) = indexed $
       in alterPerson familyTree <$> newPerson_ <*> newEvents_ <*> oldEvents_
   where
     alterPerson familyTree newPerson =
-      IS.foldr (\i -> events . _at i . eventAttendees %~ IS.delete n) .
-      IS.foldr (\i -> events . _at i . eventAttendees %~ IS.insert n) (
-      people . _at n .~ newPerson $ familyTree)
+      IS.foldr (\i -> events . ix i . eventAttendees %~ IS.delete n) .
+      IS.foldr (\i -> events . ix i . eventAttendees %~ IS.insert n) (
+      people . ix n .~ newPerson $ familyTree)
 
 -- | Constructs a lens for the manipulation of a family in a family tree, from
 -- that family's ID.
-traverseFamily :: FamilyID -> SimpleIndexedTraversal FamilyID FamilyTree Family
-traverseFamily (FamilyID n) = indexed $
+traverseFamily :: FamilyID -> IndexedTraversal' FamilyID FamilyTree Family
+traverseFamily (FamilyID n) = 
   \f familyTree -> case familyTree ^. families . at n of
     Nothing -> pure familyTree
-    Just oldFamily -> let newFamily_ = f (FamilyID n) oldFamily
+    Just oldFamily -> let newFamily_ = indexed f (FamilyID n) oldFamily
                       in alterFamily familyTree <$> newFamily_
   where
     alterFamily familyTree newFamily =
-      familyTree & families . _at n .~ newFamily
+      familyTree & families . ix n .~ newFamily
 
 -- | Constructs a 'Traversal' for the manipulation of an event in a family tree, from
 -- that event's ID.      
-traverseEvent :: EventID -> SimpleIndexedTraversal EventID FamilyTree Event
-traverseEvent (EventID n) = indexed $
+traverseEvent :: EventID -> IndexedTraversal' EventID FamilyTree Event
+traverseEvent (EventID n) =
   \f familyTree -> case familyTree ^. events . at n of
     Nothing -> pure familyTree
     Just oldEvent ->
-      let newEvent_  = f (EventID n) oldEvent
+      let newEvent_  = indexed f (EventID n) oldEvent
           oldPeople_ =      (IS.difference `on` _eventAttendees) oldEvent
             <$> newEvent_
           newPeople_ = flip (IS.difference `on` _eventAttendees) oldEvent
@@ -409,9 +409,9 @@ traverseEvent (EventID n) = indexed $
       in alterEvent familyTree <$> newEvent_ <*> newPeople_ <*> oldPeople_
   where
     alterEvent familyTree newEvent =
-      IS.foldr (\i -> people . _at i . attendedEvents %~ IS.delete n) .
-      IS.foldr (\i -> people . _at i . attendedEvents %~ IS.insert n) (
-      events . _at n .~ newEvent $ familyTree)
+      IS.foldr (\i -> people . ix i . attendedEvents %~ IS.delete n) .
+      IS.foldr (\i -> people . ix i . attendedEvents %~ IS.insert n) (
+      events . ix n .~ newEvent $ familyTree)
 
 -- | Adds a person with minimal information, returning the updated family tree
 -- and the ID of the new person.  
@@ -450,11 +450,11 @@ deletePerson (PersonID n) familyTree =
   people . at n .~ Nothing &
   families %~ IM.map (
     \fam -> fam &
-            head1 %~ (id & resultAt (Just $ PersonID n) .~ Nothing) &
-            head2 %~ (id & resultAt (Just $ PersonID n) .~ Nothing) &
-            children . contains n .~ False
+            head1 %~ (id & ix (Just $ PersonID n) .~ Nothing) &
+            head2 %~ (id & ix (Just $ PersonID n) .~ Nothing) &
+            children . ix n .~ False
             ) &
-  events %~ IM.map (eventAttendees . contains n .~ False)
+  events %~ IM.map (eventAttendees . ix n .~ False)
 
 -- | Deletes a family from the family tree, removing all references to it.    
 deleteFamily :: FamilyID -> FamilyTree -> FamilyTree

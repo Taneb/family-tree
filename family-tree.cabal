@@ -10,7 +10,7 @@ name:                family-tree
 -- PVP summary:      +-+------- breaking API changes
 --                   | | +----- non-breaking API additions
 --                   | | | +--- code changes with no API change
-version:             0.3.0.2
+version:             0.3.1.2
 
 package-url:         https://github.com/Taneb/family-tree
 
@@ -59,7 +59,7 @@ library
   
   -- Other library packages from which modules are imported.
   build-depends:       base >= 4.3 && < 5,
-                       lens >= 3.7 && < 3.9,
+                       lens >= 3.8 && < 3.9,
                        binary < 0.7,
                        unordered-containers ==0.2.*,
                        containers >=0.4.2 && < 0.6,
