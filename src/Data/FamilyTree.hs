@@ -369,7 +369,6 @@ instance Binary FamilyTree where
 -- | Constructs a 'Traversal' for the manipulation of a person in a family tree, from
 -- that person's ID. 
 traversePerson :: PersonID -> IndexedTraversal' PersonID FamilyTree Person
-<<<<<<< HEAD
 traversePerson (PersonID n) f familyTree = case familyTree ^. people . at n of
   Nothing -> pure familyTree
   Just oldPerson -> 
@@ -381,20 +380,6 @@ traversePerson (PersonID n) f familyTree = case familyTree ^. people . at n of
     in alterPerson <$> newPerson_ <*> newEvents_ <*> oldEvents_
   where
     alterPerson newPerson =
-=======
-traversePerson (PersonID n) = 
-  \f familyTree -> case familyTree ^. people . at n of
-    Nothing -> pure familyTree
-    Just oldPerson -> 
-      let newPerson_ = indexed f (PersonID n) oldPerson
-          newEvents_ = flip (IS.difference `on` _attendedEvents) oldPerson
-            <$> newPerson_
-          oldEvents_ =      (IS.difference `on` _attendedEvents) oldPerson
-            <$> newPerson_
-      in alterPerson familyTree <$> newPerson_ <*> newEvents_ <*> oldEvents_
-  where
-    alterPerson familyTree newPerson =
->>>>>>> 58b0b7f4e17526ad25ac40fc5b62aae298a3e6e4
       IS.foldr (\i -> events . ix i . eventAttendees %~ IS.delete n) .
       IS.foldr (\i -> events . ix i . eventAttendees %~ IS.insert n) (
       people . ix n .~ newPerson $ familyTree)
@@ -402,33 +387,18 @@ traversePerson (PersonID n) =
 -- | Constructs a lens for the manipulation of a family in a family tree, from
 -- that family's ID.
 traverseFamily :: FamilyID -> IndexedTraversal' FamilyID FamilyTree Family
-<<<<<<< HEAD
 traverseFamily (FamilyID n) f familyTree = case familyTree ^. families . at n of
   Nothing -> pure familyTree
   Just oldFamily -> let newFamily_ = indexed f (FamilyID n) oldFamily
                     in alterFamily <$> newFamily_
   where
     alterFamily newFamily =
-=======
-traverseFamily (FamilyID n) = 
-  \f familyTree -> case familyTree ^. families . at n of
-    Nothing -> pure familyTree
-    Just oldFamily -> let newFamily_ = indexed f (FamilyID n) oldFamily
-                      in alterFamily familyTree <$> newFamily_
-  where
-    alterFamily familyTree newFamily =
->>>>>>> 58b0b7f4e17526ad25ac40fc5b62aae298a3e6e4
       familyTree & families . ix n .~ newFamily
 
 -- | Constructs a 'Traversal' for the manipulation of an event in a family tree, from
 -- that event's ID.      
 traverseEvent :: EventID -> IndexedTraversal' EventID FamilyTree Event
-<<<<<<< HEAD
 traverseEvent (EventID n) f familyTree = case familyTree ^. events . at n of
-=======
-traverseEvent (EventID n) =
-  \f familyTree -> case familyTree ^. events . at n of
->>>>>>> 58b0b7f4e17526ad25ac40fc5b62aae298a3e6e4
     Nothing -> pure familyTree
     Just oldEvent ->
       let newEvent_  = indexed f (EventID n) oldEvent
@@ -438,11 +408,7 @@ traverseEvent (EventID n) =
              <$> newEvent_
       in alterEvent <$> newEvent_ <*> newPeople_ <*> oldPeople_
   where
-<<<<<<< HEAD
     alterEvent newEvent =
-=======
-    alterEvent familyTree newEvent =
->>>>>>> 58b0b7f4e17526ad25ac40fc5b62aae298a3e6e4
       IS.foldr (\i -> people . ix i . attendedEvents %~ IS.delete n) .
       IS.foldr (\i -> people . ix i . attendedEvents %~ IS.insert n) (
       events . ix n .~ newEvent $ familyTree)
