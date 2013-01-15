@@ -2,6 +2,8 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE GADTs #-}
 {-# OPTIONS_GHC -Wall #-}
 {-|
 Maintainer  :  nvd124@gmail.com
@@ -88,6 +90,7 @@ import Data.IntMap (IntMap)
 import qualified Data.IntMap as IM
 import Data.IntSet (IntSet)
 import qualified Data.IntSet as IS
+--import Data.Table
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
@@ -365,53 +368,50 @@ instance Binary FamilyTree where
 
 -- | Constructs a 'Traversal' for the manipulation of a person in a family tree, from
 -- that person's ID. 
-traversePerson :: PersonID -> SimpleIndexedTraversal PersonID FamilyTree Person
-traversePerson (PersonID n) = indexed $
-  \f familyTree -> case familyTree ^. people . at n of
-    Nothing -> pure familyTree
-    Just oldPerson -> 
-      let newPerson_ = f (PersonID n) oldPerson
-          newEvents_ = flip (IS.difference `on` _attendedEvents) oldPerson
-            <$> newPerson_
-          oldEvents_ =      (IS.difference `on` _attendedEvents) oldPerson
-            <$> newPerson_
-      in alterPerson familyTree <$> newPerson_ <*> newEvents_ <*> oldEvents_
+traversePerson :: PersonID -> IndexedTraversal' PersonID FamilyTree Person
+traversePerson (PersonID n) f familyTree = case familyTree ^. people . at n of
+  Nothing -> pure familyTree
+  Just oldPerson -> 
+    let newPerson_ = indexed f (PersonID n) oldPerson
+        newEvents_ = flip (IS.difference `on` _attendedEvents) oldPerson
+          <$> newPerson_
+        oldEvents_ =      (IS.difference `on` _attendedEvents) oldPerson
+          <$> newPerson_
+    in alterPerson <$> newPerson_ <*> newEvents_ <*> oldEvents_
   where
-    alterPerson familyTree newPerson =
-      IS.foldr (\i -> events . _at i . eventAttendees %~ IS.delete n) .
-      IS.foldr (\i -> events . _at i . eventAttendees %~ IS.insert n) (
-      people . _at n .~ newPerson $ familyTree)
+    alterPerson newPerson =
+      IS.foldr (\i -> events . ix i . eventAttendees %~ IS.delete n) .
+      IS.foldr (\i -> events . ix i . eventAttendees %~ IS.insert n) (
+      people . ix n .~ newPerson $ familyTree)
 
 -- | Constructs a lens for the manipulation of a family in a family tree, from
 -- that family's ID.
-traverseFamily :: FamilyID -> SimpleIndexedTraversal FamilyID FamilyTree Family
-traverseFamily (FamilyID n) = indexed $
-  \f familyTree -> case familyTree ^. families . at n of
-    Nothing -> pure familyTree
-    Just oldFamily -> let newFamily_ = f (FamilyID n) oldFamily
-                      in alterFamily familyTree <$> newFamily_
+traverseFamily :: FamilyID -> IndexedTraversal' FamilyID FamilyTree Family
+traverseFamily (FamilyID n) f familyTree = case familyTree ^. families . at n of
+  Nothing -> pure familyTree
+  Just oldFamily -> let newFamily_ = indexed f (FamilyID n) oldFamily
+                    in alterFamily <$> newFamily_
   where
-    alterFamily familyTree newFamily =
-      familyTree & families . _at n .~ newFamily
+    alterFamily newFamily =
+      familyTree & families . ix n .~ newFamily
 
 -- | Constructs a 'Traversal' for the manipulation of an event in a family tree, from
 -- that event's ID.      
-traverseEvent :: EventID -> SimpleIndexedTraversal EventID FamilyTree Event
-traverseEvent (EventID n) = indexed $
-  \f familyTree -> case familyTree ^. events . at n of
+traverseEvent :: EventID -> IndexedTraversal' EventID FamilyTree Event
+traverseEvent (EventID n) f familyTree = case familyTree ^. events . at n of
     Nothing -> pure familyTree
     Just oldEvent ->
-      let newEvent_  = f (EventID n) oldEvent
+      let newEvent_  = indexed f (EventID n) oldEvent
           oldPeople_ =      (IS.difference `on` _eventAttendees) oldEvent
             <$> newEvent_
           newPeople_ = flip (IS.difference `on` _eventAttendees) oldEvent
              <$> newEvent_
-      in alterEvent familyTree <$> newEvent_ <*> newPeople_ <*> oldPeople_
+      in alterEvent <$> newEvent_ <*> newPeople_ <*> oldPeople_
   where
-    alterEvent familyTree newEvent =
-      IS.foldr (\i -> people . _at i . attendedEvents %~ IS.delete n) .
-      IS.foldr (\i -> people . _at i . attendedEvents %~ IS.insert n) (
-      events . _at n .~ newEvent $ familyTree)
+    alterEvent newEvent =
+      IS.foldr (\i -> people . ix i . attendedEvents %~ IS.delete n) .
+      IS.foldr (\i -> people . ix i . attendedEvents %~ IS.insert n) (
+      events . ix n .~ newEvent $ familyTree)
 
 -- | Adds a person with minimal information, returning the updated family tree
 -- and the ID of the new person.  
@@ -450,11 +450,11 @@ deletePerson (PersonID n) familyTree =
   people . at n .~ Nothing &
   families %~ IM.map (
     \fam -> fam &
-            head1 %~ (id & resultAt (Just $ PersonID n) .~ Nothing) &
-            head2 %~ (id & resultAt (Just $ PersonID n) .~ Nothing) &
-            children . contains n .~ False
+            head1 %~ (id & ix (Just $ PersonID n) .~ Nothing) &
+            head2 %~ (id & ix (Just $ PersonID n) .~ Nothing) &
+            children . ix n .~ False
             ) &
-  events %~ IM.map (eventAttendees . contains n .~ False)
+  events %~ IM.map (eventAttendees . ix n .~ False)
 
 -- | Deletes a family from the family tree, removing all references to it.    
 deleteFamily :: FamilyID -> FamilyTree -> FamilyTree
