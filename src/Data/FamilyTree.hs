@@ -1,6 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -17,8 +16,6 @@ It uses lenses for the manipulation of people. For the usage of lenses, see
 "Control.Lens"
 
 It is reccomended to use "Data.Binary" to do saving and loading.
-
-
 -}
 module Data.FamilyTree
  (
@@ -38,15 +35,10 @@ module Data.FamilyTree
  relationFrom,
  relationTo,
  relationship,
-  
  FamilyTree(..),
  treeName,
  people,
  families,
-  -- ** ID types
- -- $ids
- PersonID(..),
- FamilyID(..),
  -- ** Other types
  PartialDate,
  Location(..),
@@ -67,45 +59,27 @@ module Data.FamilyTree
  partialDateFromDay
 ) where
 
-import Control.Applicative (Applicative(..), (<$>), Alternative(..))
+import Control.Applicative (Applicative(..), (<$>), Alternative((<|>)))
 import Control.Lens hiding (children)
 
-import Data.Binary (Binary(..), Word8, getWord8)
+import Data.Binary (Binary(..), putWord8, getWord8)
 import Data.Function (on)
+import Data.Hashable (Hashable(..))
 import Data.HashMap.Strict (HashMap)
 import qualified Data.HashMap.Strict as HM
-import Data.Maybe (listToMaybe)
 import Data.Monoid (Monoid(..), First(..))
-import Data.IntMap (IntMap)
-import qualified Data.IntMap as IM
 import Data.IntSet (IntSet)
 import qualified Data.IntSet as IS
---import Data.Table
+import Data.Table
 import Data.String
 import Data.Text (Text)
---import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8, decodeUtf8)
 import Data.Time (Day(..), fromGregorian, gregorianMonthLength)
 
-import GHC.Generics
+import GHC.Generics (Generic)
 
 import Numeric.Interval (Interval)
 import qualified Numeric.Interval as I
-
--- $ids
--- The various ID types represent an identifier for a person, family, or event. 
--- While the constructors are exported, it is probably better to use the
--- various 'Traversal's for manipulation, as they echo the changes around the
--- tree automatically.
-newtype PersonID = PersonID {getPersonID :: Int} deriving (Eq, Ord, Show, Read, Generic)
-
-instance Wrapped Int Int PersonID PersonID where
-  wrapped = iso PersonID getPersonID
-
-newtype FamilyID = FamilyID {getFamilyID :: Int} deriving (Eq, Ord, Show, Read, Generic)
-
-instance Wrapped Int Int FamilyID FamilyID where
-  wrapped = iso FamilyID getFamilyID
 
 -- | The Location type. Either a coordinate or a placename.  
 data Location = Coord Double Double | PlaceName Text deriving (Eq, Show, Generic)
@@ -132,7 +106,8 @@ partialDateFromDay y m d = I.singleton $ fromGregorian y m d
 -- non-existent, for intance a death date for someone still alive) is a
 -- convention used throughout this library.
 data Person = Person
-  {_name :: Maybe Text
+  {_personId :: Int
+  ,_name :: Maybe Text
   ,_birthdate :: Maybe PartialDate
   ,_birthplace :: Maybe Location
   ,_deathdate :: Maybe PartialDate
@@ -142,11 +117,46 @@ data Person = Person
              
 makeLenses ''Person
 
+instance Tabular Person where
+  type PKT Person = Int
+  data Tab Person i = PersonTab (i Primary Int) (i SupplementalHash (Maybe Text)) (i Supplemental (Maybe PartialDate))
+                      (i SupplementalHash (Maybe Location)) (i Supplemental (Maybe PartialDate)) 
+                      (i SupplementalHash (Maybe Location))
+  data Key k Person t where
+    PersonID :: Key Primary Person Int
+    Name :: Key SupplementalHash Person (Maybe Text)
+    BirthDate :: Key Supplemental Person (Maybe PartialDate)
+    BirthPlace :: Key SupplementalHash Person (Maybe Location)
+    DeathDate :: Key Supplemental Person (Maybe PartialDate)
+    DeathPlace :: Key SupplementalHash Person (Maybe Location)
+  fetch PersonID = _personId
+  fetch Name = _name
+  fetch BirthDate = _birthdate
+  fetch BirthPlace = _birthplace
+  fetch DeathDate = _deathdate
+  fetch DeathPlace = _deathplace
+  primary = PersonID
+  primarily PersonID r = r
+  mkTab f = PersonTab <$> f PersonID <*> f Name <*> f BirthDate <*> f BirthPlace
+            <*> f DeathDate <*> f DeathPlace  
+  ixTab (PersonTab i n bd bp dd dp) k = case k of
+    PersonID -> i
+    Name -> n
+    BirthDate -> bd
+    BirthPlace -> bp
+    DeathDate -> dd
+    DeathPlace -> dp
+  forTab (PersonTab i n bd bp dd dp) f =
+    PersonTab <$> f PersonID i <*> f Name n <*> f BirthDate bd <*> f BirthPlace bp
+    <*> f DeathDate dd <*> f DeathPlace dp
+  autoTab = autoIncrement personId
+
 -- | The basic type for a family. Which person is head1 and which is head2 is
 -- arbitrary, but try to use a consistent rule
 data Family = Family
-  {_head1 :: Maybe PersonID
-  ,_head2 :: Maybe PersonID
+  {_familyId :: Int
+  ,_head1 :: Maybe Int
+  ,_head2 :: Maybe Int
   ,_relationship :: Maybe Relationship
   ,_relationFrom :: Maybe PartialDate
   ,_relationTo :: Maybe PartialDate
@@ -155,17 +165,55 @@ data Family = Family
   
 makeLenses ''Family
 
+instance Tabular Family where
+  type PKT Family = Int
+  data Tab Family i = FamilyTab (i Primary Int) (i Supplemental (Maybe Int)) (i Supplemental (Maybe Int))
+                      (i SupplementalHash (Maybe Relationship)) (i Supplemental (Maybe PartialDate))
+                      (i Supplemental (Maybe PartialDate)) (i InvertedInt (IntSet))
+  data Key k Family t where
+    FamilyID :: Key Primary Family Int
+    Head1 :: Key Supplemental Family (Maybe Int)
+    Head2 :: Key Supplemental Family (Maybe Int)
+    Relationship :: Key SupplementalHash Family (Maybe Relationship)
+    RelationFrom :: Key Supplemental Family (Maybe PartialDate)
+    RelationTo :: Key Supplemental Family (Maybe PartialDate)
+    Children :: Key InvertedInt Family IntSet
+  fetch FamilyID = _familyId
+  fetch Head1 = _head1
+  fetch Head2 = _head2
+  fetch Relationship = _relationship
+  fetch RelationFrom = _relationFrom
+  fetch RelationTo = _relationTo
+  fetch Children = _children
+  primary = FamilyID
+  primarily FamilyID r = r
+  mkTab f = FamilyTab <$> f FamilyID <*> f Head1 <*> f Head2 <*> f Relationship
+            <*> f RelationFrom <*> f RelationTo <*> f Children
+  ixTab (FamilyTab i h1 h2 r rf rt c) k = case k of
+    FamilyID -> i
+    Head1 -> h1
+    Head2 -> h2
+    Relationship -> r
+    RelationFrom -> rf
+    RelationTo -> rt
+    Children -> c
+  forTab (FamilyTab i h1 h2 r rf rt c) f =
+    FamilyTab <$> f FamilyID i <*> f Head1 h1 <*> f Head2 h2 <*> f Relationship r
+    <*> f RelationFrom rf <*> f RelationTo rt <*> f Children c
+  autoTab = autoIncrement familyId
+
 -- | The core structure of a family tree.
 data FamilyTree = FamilyTree
   {_treeName :: Text
-  ,_people :: IntMap Person
-  ,_families :: IntMap Family
+  ,_people :: Table Person
+  ,_families :: Table Family
   } deriving (Eq, Show, Generic)
   
 makeLenses ''FamilyTree
 
 instance Monoid Person where
   mempty = Person {
+    _personId = 0,
     _name = Nothing,
     _birthdate = Nothing,
     _birthplace = Nothing,
@@ -174,6 +222,7 @@ instance Monoid Person where
     _attributes = HM.empty
     }
   p1 `mappend` p2 = Person {
+    _personId = _personId p1,
     _name = ((<|>) `on` _name) p1 p2,
     _birthdate = ((<|>) `on` _birthdate) p1 p2,
     _birthplace = ((<|>) `on` _birthplace) p1 p2,
@@ -184,6 +233,7 @@ instance Monoid Person where
 
 instance Monoid Family where
   mempty = Family {
+    _familyId = 0,
     _head1 = Nothing,
     _head2 = Nothing,
     _relationship = Nothing,
@@ -192,6 +242,7 @@ instance Monoid Family where
     _children = IS.empty
     }
   f1 `mappend` f2 = Family {
+    _familyId = _familyId f1,
     _head1 = getFirst $ (mappend `on` First . _head1) f1 f2,
     _head2 = getFirst $ (mappend `on` First . _head2) f1 f2,
     _relationship = getFirst $ (mappend `on` First . _relationship) f1 f2,
@@ -200,14 +251,13 @@ instance Monoid Family where
     _children = (IS.union `on` _children) f1 f2
     }
 
-
 instance Binary Location where
-  {-put (Coord x y) = do
-    put (0 :: Word8)
+  put (Coord x y) = do
+    putWord8 0
     put x
     put y
   put (PlaceName t) = do
-    put (1 :: Word8)
+    putWord8 1
     put (encodeUtf8 t)
   get = do
     tag <- getWord8
@@ -216,21 +266,26 @@ instance Binary Location where
         x <- get
         y <- get
         return $ Coord x y
-      _ -> PlaceName . decodeUtf8 <$> get-}
+      _ -> PlaceName . decodeUtf8 <$> get
 
+instance Hashable Location
+  
 instance Binary Relationship where
   put (Other t) = do
-    put (0 :: Word8)
+    putWord8 0
     put (encodeUtf8 t)
-  put Marriage = put (1 :: Word8)
+  put Marriage = putWord8 1
   get = do
     tag <- getWord8
     case tag of
       0 -> Other . decodeUtf8 <$> get
       _ -> return Marriage
 
+instance Hashable Relationship
+
 instance Binary Person where
   put person = do
+    put (_personId person)
     put (encodeUtf8 <$> _name person)
     put (toModifiedJulianDay . I.inf <$> _birthdate person)
     put (toModifiedJulianDay . I.sup <$> _birthdate person)
@@ -240,6 +295,7 @@ instance Binary Person where
     put (_deathplace person)
     put (map (both %~ encodeUtf8) . HM.toList $ _attributes person)
   get = do
+    i <- get
     n <- get
     bdi <- get
     bds <- get
@@ -249,7 +305,8 @@ instance Binary Person where
     dp <- get
     a <- get
     return Person
-      {_name = fmap decodeUtf8 n
+      {_personId = i
+      ,_name = fmap decodeUtf8 n
       ,_birthdate = I.I <$> fmap ModifiedJulianDay bdi <*>
         fmap ModifiedJulianDay bds
       ,_birthplace = bp
@@ -261,8 +318,9 @@ instance Binary Person where
 
 instance Binary Family where
   put fam = do
-    put $ getPersonID <$> _head1 fam
-    put $ getPersonID <$> _head2 fam
+    put $ _familyId fam
+    put $ _head1 fam
+    put $ _head2 fam
     put $ _relationship fam
     put $ toModifiedJulianDay . I.inf <$> _relationFrom fam
     put $ toModifiedJulianDay . I.sup <$> _relationFrom fam
@@ -270,6 +328,7 @@ instance Binary Family where
     put $ toModifiedJulianDay . I.sup <$> _relationTo fam
     put $ _children fam
   get = do
+    f <- get
     h1 <- get
     h2 <- get
     r <- get
@@ -279,8 +338,9 @@ instance Binary Family where
     rts <- get
     c <- get
     return Family
-      {_head1 = PersonID <$> h1
-      ,_head2 = PersonID <$> h2
+      {_familyId = f
+      ,_head1 = h1
+      ,_head2 = h2
       ,_relationship = r
       ,_relationFrom = I.I <$> fmap ModifiedJulianDay rfi <*> fmap ModifiedJulianDay rfs
       ,_relationTo = I.I <$> fmap ModifiedJulianDay rti <*> fmap ModifiedJulianDay rts
@@ -303,25 +363,22 @@ instance Binary FamilyTree where
       }
 
 class FamilyTreePart part where
-  type ID part
-  -- | 'accessFT' is a 'Traversal' to the part of the family tree (either a 'Person' or a 'Family') with the given 'ID'
-  accessFT :: ID part -> IndexedTraversal' (ID part) FamilyTree part
+  -- | 'accessFT' is a 'Traversal' to the part of the family tree (either a 'Person' or a 'Family')
+  accessFT :: Int -> IndexedTraversal' Int FamilyTree part
 
 instance FamilyTreePart Person where
-  type ID Person = PersonID
-  accessFT (PersonID n) f familyTree = case familyTree ^. people . at n of
+  accessFT n f familyTree = case familyTree ^. people . at n of
     Nothing -> pure familyTree
     Just oldPerson ->
-      let newPerson_ = indexed f (PersonID n) oldPerson
+      let newPerson_ = indexed f n oldPerson
       in alterPerson <$> newPerson_
     where
       alterPerson newPerson = people . ix n .~ newPerson $ familyTree
 
 instance FamilyTreePart Family where
-  type ID Family = FamilyID
-  accessFT (FamilyID n) f familyTree = case familyTree ^. families . at n of
+  accessFT n f familyTree = case familyTree ^. families . at n of
     Nothing -> pure familyTree
-    Just oldFamily -> let newFamily_ = indexed f (FamilyID n) oldFamily
+    Just oldFamily -> let newFamily_ = indexed f n oldFamily
                       in alterFamily <$> newFamily_
     where
       alterFamily newFamily =
@@ -329,45 +386,35 @@ instance FamilyTreePart Family where
 
 -- | Adds a person with minimal information, returning the updated family tree
 -- and the ID of the new person.  
-addPerson :: FamilyTree -> (PersonID, FamilyTree)
-addPerson familyTree =
-  let n = maybe 0 fst $
-          listToMaybe $
-          dropWhile (uncurry (==)) $
-          zip [1 ..] $ IM.keys $ _people familyTree
-  in (PersonID n, people . at n ?~ mempty $ familyTree)
+addPerson :: FamilyTree -> (Int, FamilyTree)
+addPerson = people %%~ (_1 %~ _personId) . insert' mempty
 
 -- | Adds a family with minimal information, returning the updated family tree
 -- and the ID of the new family.  
-addFamily :: FamilyTree -> (FamilyID, FamilyTree)
-addFamily familyTree =
-  let n = maybe 0 fst $
-          listToMaybe $
-          dropWhile (uncurry (==)) $
-          zip [1 ..] $ IM.keys $ _families familyTree
-  in (FamilyID n, families . at n ?~ mempty $ familyTree)
+addFamily :: FamilyTree -> (Int, FamilyTree)
+addFamily = families %%~ (_1 %~ _familyId) . insert' mempty
 
 -- | Deletes a person from the family tree, removing all references to them.  
-deletePerson :: PersonID -> FamilyTree -> FamilyTree
-deletePerson (PersonID n) familyTree =
+deletePerson :: Int -> FamilyTree -> FamilyTree
+deletePerson n familyTree =
   familyTree &
   people . at n .~ Nothing &
-  families %~ IM.map (
+  families . each %~ 
     \fam -> fam &
-            head1 %~ (id & ix (Just $ PersonID n) .~ Nothing) &
-            head2 %~ (id & ix (Just $ PersonID n) .~ Nothing) &
+            head1 %~ set (ix $ Just n) Nothing id & 
+            head2 %~ set (ix $ Just n) Nothing id &
             children . contains n .~ False
-            )
+            
 
 -- | Deletes a family from the family tree, removing all references to it.    
-deleteFamily :: FamilyID -> FamilyTree -> FamilyTree
-deleteFamily (FamilyID n) = families . at n .~ Nothing
+deleteFamily :: Int -> FamilyTree -> FamilyTree
+deleteFamily n = families . at n .~ Nothing
 
 -- | Creates a new tree with a given name.       
 newTree :: Text -> FamilyTree
 newTree n = FamilyTree
   {_treeName = n
-  ,_people = IM.empty
-  ,_families = IM.empty
+  ,_people = empty
+  ,_families = empty
   }
 
