@@ -1,5 +1,5 @@
 name:                family-tree
-version:             0.5
+version:             0.5.1
 package-url:         https://github.com/Taneb/family-tree
 synopsis:            A family tree library for the Haskell programming language.
 description:         A family tree library for the Haskell programming language.
@@ -17,14 +17,14 @@ cabal-version:       >=1.8
 library
   exposed-modules:     Data.FamilyTree
   build-depends:       base >= 4.3 && < 5,
-                       lens >= 3.8 && < 3.10,
-                       binary < 0.7,
+                       lens >= 3.8 && < 5,
+                       binary < 0.8,
                        unordered-containers ==0.2.*,
                        containers >=0.4.2 && < 0.6,
-                       text ==0.11.*,
+                       text >0.11 && <1.3,
                        time < 1.5,
-                       intervals < 0.3,
-                       tables ==0.3.*,
+                       intervals < 0.8,
+                       tables >0.3 && <0.5,
                        hashable >= 1.1.1.0 && < 1.3
   hs-source-dirs:      src
 

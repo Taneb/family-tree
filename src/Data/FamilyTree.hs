@@ -60,7 +60,7 @@ module Data.FamilyTree
 ) where
 
 import Control.Applicative (Applicative(..), (<$>), Alternative((<|>)))
-import Control.Lens hiding (children)
+import Control.Lens hiding (children, (...))
 
 import Data.Binary (Binary(..), putWord8, getWord8)
 import Data.Function (on)
@@ -78,7 +78,7 @@ import Data.Time (Day(..), fromGregorian, gregorianMonthLength)
 
 import GHC.Generics (Generic)
 
-import Numeric.Interval (Interval)
+import Numeric.Interval (Interval, (...))
 import qualified Numeric.Interval as I
 
 -- | The Location type. Either a coordinate or a placename.  
@@ -93,10 +93,10 @@ data Relationship = Marriage | Other Text deriving (Eq, Show, Generic)
 type PartialDate = Interval Day
 
 partialDateFromYear :: Integer -> PartialDate
-partialDateFromYear n = I.I (fromGregorian n 1 1) (fromGregorian n 12 31)
+partialDateFromYear n = fromGregorian n 1 1 ... fromGregorian n 12 31
 
 partialDateFromMonth :: Integer -> Int -> PartialDate
-partialDateFromMonth y m = I.I (fromGregorian y m 1) . 
+partialDateFromMonth y m = (...) (fromGregorian y m 1) . 
     fromGregorian y m $ gregorianMonthLength y m
 
 partialDateFromDay :: Integer -> Int -> Int -> PartialDate
@@ -307,10 +307,10 @@ instance Binary Person where
     return Person
       {_personId = i
       ,_name = fmap decodeUtf8 n
-      ,_birthdate = I.I <$> fmap ModifiedJulianDay bdi <*>
+      ,_birthdate = (...) <$> fmap ModifiedJulianDay bdi <*>
         fmap ModifiedJulianDay bds
       ,_birthplace = bp
-      ,_deathdate = I.I <$> fmap ModifiedJulianDay ddi <*>
+      ,_deathdate = (...) <$> fmap ModifiedJulianDay ddi <*>
         fmap ModifiedJulianDay dds
       ,_deathplace = dp
       ,_attributes = HM.fromList $ map (both %~ decodeUtf8) a
@@ -342,8 +342,8 @@ instance Binary Family where
       ,_head1 = h1
       ,_head2 = h2
       ,_relationship = r
-      ,_relationFrom = I.I <$> fmap ModifiedJulianDay rfi <*> fmap ModifiedJulianDay rfs
-      ,_relationTo = I.I <$> fmap ModifiedJulianDay rti <*> fmap ModifiedJulianDay rts
+      ,_relationFrom = (...) <$> fmap ModifiedJulianDay rfi <*> fmap ModifiedJulianDay rfs
+      ,_relationTo = (...) <$> fmap ModifiedJulianDay rti <*> fmap ModifiedJulianDay rts
       ,_children = c
       }
       
